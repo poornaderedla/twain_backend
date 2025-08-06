@@ -18,4 +18,4 @@ class Persona(BaseModel):
     objections : List[str] = [] 
     competitive_advantages : List[str] = []
     
-    
+

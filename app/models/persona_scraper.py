@@ -1,116 +1,212 @@
+import json
+import os
+from dotenv import load_dotenv
+from typing import List
 import requests
 from bs4 import BeautifulSoup
-from typing import List, Optional
+import google.generativeai as genai
 from .persona_model import Persona, SocialProof
 
-def scrape_persona_from_url(url: str, description: str) -> Persona:
+# loading the env file attributes
+load_dotenv()
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+
+
+
+def persona_scraper(url: str, description: str) -> Persona:
     """
-    Scrape the given URL and extract persona-related information, using the description to guide extraction.
+    Scrapes web content, combines it with a description, sends it to the Gemini API,
+    and parses the JSON response into a Persona model.
     """
-    import re
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
+    # Configure the Gemini API client
+    genai.configure(api_key=gemini_api_key)
 
-    desc_keywords = set(description.lower().split())
 
-    def is_relevant(text, keywords=desc_keywords):
-        text_words = set(text.lower().split())
-        return bool(keywords & text_words)
+    # Scrape web content
+    web_content = ''
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        print(gemini_api_key , description)
+        # Extract meaningful content hierarchically
+        content_tags = []
+        
+        # First priority: Main content containers
+        main_content = soup.find_all(['main', 'article', 'section'])
+        if main_content:
+            for tag in main_content:
+                content_tags.extend([
+                    t.get_text(strip=True) for t in tag.find_all(['h1', 'h2', 'h3', 'p', 'li'])
+                    if t.get_text(strip=True)
+                ])
+        
+        # Second priority: Important text elements
+        if not content_tags:
+            # Headers for titles and main points
+            content_tags.extend([t.get_text(strip=True) for t in soup.find_all(['h1', 'h2', 'h3'])])
+            # Paragraphs for detailed content
+            content_tags.extend([t.get_text(strip=True) for t in soup.find_all('p')])
+            # Lists for features, benefits, etc.
+            content_tags.extend([t.get_text(strip=True) for t in soup.find_all('li')])
+            
+        # Convert to string and clean up
+        web_content = '\n'.join(filter(None, content_tags))
+        print(f"[DEBUG] Scraped content length: {len(web_content)}")
+    except Exception as e:
+        print(f"[ERROR] Error scraping URL: {e}")
+        web_content = ''
 
-    def extract_points(tags, keywords=None, min_len=20, max_points=3):
-        points = []
-        for tag in tags:
-            for el in soup.find_all(tag):
-                text = el.get_text(strip=True)
-                if text and len(text) >= min_len:
-                    if not keywords or is_relevant(text, keywords):
-                        points.append(text)
-                if len(points) >= max_points:
-                    break
-            if len(points) >= max_points:
-                break
-        return points
+    # Always initialize the model outside the try block
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
-    h1 = soup.find('h1')
-    name = h1.get_text(strip=True) if h1 else None
+    # Prepare the prompt for Gemini
+    prompt = f"""
+    You are an expert B2B analyst specializing in deep market research and competitive analysis. Your task is to perform an extensive analysis of the content and extract comprehensive business insights.
 
-    # Title extraction
-    meta_title = soup.find('meta', attrs={'name': 'title'})
-    title = None
-    if meta_title and meta_title.get('content'):
-        title = meta_title['content'].strip()
-    else:
-        h2 = soup.find('h2')
-        if h2 and h2.get_text(strip=True):
-            title = h2.get_text(strip=True)
-        else:
-            h3 = soup.find('h3')
-            if h3 and h3.get_text(strip=True):
-                title = h3.get_text(strip=True)
+    DETAILED EXTRACTION GUIDELINES:
 
-    # Company extraction
-    company = None
-    meta_company = soup.find('meta', attrs={'name': 'company'})
-    if meta_company and meta_company.get('content'):
-        company = meta_company['content'].strip()
-    else:
-        strong = soup.find('strong')
-        if strong and strong.get_text(strip=True):
-            company = strong.get_text(strip=True)
-        elif h1 and h1.get_text(strip=True):
-            company = h1.get_text(strip=True)
+    1. Organization Context (Look for these across the entire content):
+       - title: Position or role type you're analyzing (e.g., "Chief Technology Officer", "IT Manager")
+       - company: Company type or industry vertical
 
-    # Email extraction
-    email = None
-    emails = re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", soup.get_text())
-    if emails:
-        email = emails[0]
+    2. Business Analysis (Provide detailed, multi-sentence points for each category):
+       - pain_points: Identify and elaborate on:
+           * Current operational challenges and their impact
+           * Strategic business problems and their implications
+           * Market pressures and competitive threats
+           * Resource constraints and efficiency issues
+           * Growth bottlenecks and scaling challenges
+           Minimum 4-5 detailed points, each with context and impact.
 
-    # Keyword sets for each field
-    pain_keywords = desc_keywords | {"problem", "challenge", "issue", "pain", "struggle", "difficulty"}
-    inaction_keywords = {"risk", "consequence", "cost", "loss", "missed", "fail", "failure"}
-    solution_keywords = {"solution", "resolve", "fix", "address", "answer", "approach", "method"}
-    objection_keywords = {"objection", "concern", "hesitation", "doubt", "barrier", "blocker"}
-    advantage_keywords = {"advantage", "benefit", "edge", "superior", "unique", "better", "strength"}
+       - social_proof: Create comprehensive proof points, each with:
+           * statement: Detailed success metrics, case studies, or testimonials (2-3 sentences each)
+           * source: Specific attribution (company name, role, or data source)
+           Include at least 4-5 substantial proof points with metrics when possible.
 
-    # Search both <li> and <p> for all fields, prefer <li> but fallback to <p>
-    pain_points = extract_points(['li', 'p'], pain_keywords, min_len=20, max_points=3)
-    cost_of_inaction = extract_points(['li', 'p'], inaction_keywords, min_len=20, max_points=2)
-    solutions = extract_points(['li', 'p'], solution_keywords, min_len=20, max_points=2)
-    objections = extract_points(['li', 'p'], objection_keywords, min_len=20, max_points=2)
-    competitive_advantages = extract_points(['li', 'p'], advantage_keywords, min_len=20, max_points=2)
+       - cost_of_inaction: Analyze and detail:
+           * Short-term financial impacts
+           * Long-term strategic risks
+           * Competitive disadvantages
+           * Market share implications
+           * Operational inefficiencies
+           Minimum 4-5 points with specific consequences.
 
-    # Social proof extraction
-    social_proof = []
-    for block in soup.find_all(['blockquote', 'q']):
-        statement = block.get_text(strip=True)
-        if statement:
-            social_proof.append(SocialProof(statement=statement, source=url))
-    # Also look for testimonial/review keywords in all <p> and <li>
-    if not social_proof:
-        for tag in ['p', 'li']:
-            for el in soup.find_all(tag):
-                text = el.get_text(strip=True)
-                if any(kw in text.lower() for kw in ["testimonial", "review", "said", "feedback"]):
-                    social_proof.append(SocialProof(statement=text, source=url))
-                if len(social_proof) >= 2:
-                    break
-            if len(social_proof) >= 2:
-                break
+       - solutions: Document comprehensive solutions including:
+           * Core features and their direct benefits
+           * Implementation strategies
+           * Expected outcomes
+           * Integration capabilities
+           * Success metrics
+           Provide at least 5-6 detailed solution points.
 
-    def ensure_list(data):
-        return data if data else []
+       - objections: Address major concerns including:
+           * Implementation challenges
+           * Resource requirements
+           * Change management issues
+           * Technical limitations
+           * Budget considerations
+           List 4-5 significant objections with context.
 
-    persona = Persona(
-        name=name,
-        title=title,
-        company=company,
-        email=email,
-        pain_points=ensure_list(pain_points),
-        social_proof=ensure_list(social_proof),
-        cost_of_inaction=ensure_list(cost_of_inaction),
-        solutions=ensure_list(solutions),
-        objections=ensure_list(objections),
-        competitive_advantages=ensure_list(competitive_advantages)
+       - competitive_advantages: Detail strategic benefits including:
+           * Unique technological capabilities
+           * Market positioning strengths
+           * Operational efficiencies
+           * Customer success factors
+           * Innovation differentiators
+           Minimum 4-5 substantial advantages.
+
+    IMPORTANT:
+    - Format text fields as strings, empty string if not found
+    - social_proof must be an array of objects with 'statement' and 'source' fields
+    - Other list fields should be arrays of strings
+    - NEVER use null values (except for social_proof source field)
+    - Be specific and business-focused
+    - Include industry-specific terminology
+    - Include quantitative metrics where possible
+
+    Content to Analyze:
+    {web_content}
+
+    Additional Context:
+    {description}
+
+    Return ONLY a JSON object matching this structure (no additional text):
+    {{"title": "", "company": "",
+      "pain_points": [],
+      "social_proof": [
+          {{"statement": "Example success metric", "source": "Source if available"}}
+      ],
+      "cost_of_inaction": [],
+      "solutions": [],
+      "objections": [],
+      "competitive_advantages": []}}
+    """
+
+    # It's recommended to use a model that supports JSON mode for more reliable JSON output.
+    # For example, 'gemini-1.5-flash' or 'gemini-1.5-pro'.
+    
+    try:
+        # Forcing a JSON response
+        generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        
+        ai_response = model.generate_content(prompt, generation_config=generation_config)
+        
+        
+        # The response text should be a valid JSON string
+        print(ai_response.text)
+        persona_json = json.loads(ai_response.text)
+    except Exception as e:
+        print(f"Error calling Gemini API or parsing JSON: {e}")
+        persona_json = {}
+
+    def ensure_list(val):
+        if val is None:
+            return []
+        if isinstance(val, list):
+            return val
+        if isinstance(val, str):
+            # Split by comma and strip whitespace from each item
+            return [v.strip() for v in val.split(',') if v.strip()]
+        return list(val) if val else []
+
+    # Patch persona_json to ensure all list fields are lists, not null
+    for field in [
+        'pain_points', 'social_proof', 'cost_of_inaction',
+        'solutions', 'objections', 'competitive_advantages']:
+        if persona_json.get(field) is None:
+            persona_json[field] = []
+
+    # Process social proof into proper objects
+    def process_social_proof(proofs):
+        if not proofs or not isinstance(proofs, list):
+            return []
+        result = []
+        for proof in proofs:
+            if isinstance(proof, dict):
+                # If it's already in the correct format
+                result.append(SocialProof(
+                    statement=proof.get('statement', ''),
+                    source=proof.get('source')
+                ))
+            elif isinstance(proof, str):
+                # If it's a string, use it as statement with no source
+                result.append(SocialProof(statement=proof))
+        return result
+
+    # Create and return the Persona object
+    return Persona(
+        name='',  # Explicitly empty
+        title=(persona_json.get('title') or '').strip() or None,
+        company=(persona_json.get('company') or '').strip() or None,
+        email='',  # Explicitly empty
+        pain_points=ensure_list(persona_json.get('pain_points')),
+        social_proof=process_social_proof(persona_json.get('social_proof')),
+        cost_of_inaction=ensure_list(persona_json.get('cost_of_inaction')),
+        solutions=ensure_list(persona_json.get('solutions')),
+        objections=ensure_list(persona_json.get('objections')),
+        competitive_advantages=ensure_list(persona_json.get('competitive_advantages'))
     )
-    return persona
+    
+    
