@@ -15,7 +15,7 @@ from app.models.persona_model import Persona, SocialProof
 from app.utils import prompts
 
 # Configure the Gemini API client with the key from settings
-api_key = settings.gemini_api_key
+api_key = settings.GEMINI_API_KEY
 if not api_key:
     raise ValueError("GEMINI_API_KEY not found in environment variables or .env file")
 genai.configure(api_key=api_key)
@@ -29,9 +29,9 @@ def persona_scraper(url: str, description: str) -> Persona:
     and parses the JSON response into a Persona model.
     """
     # Configure the Gemini API client
-    if not settings.gemini_api_key:
+    if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not configured")
-    genai.configure(api_key=settings.gemini_api_key)
+    genai.configure(api_key=settings.GEMINI_API_KEY)
 
 
     # Scrape web content
@@ -79,15 +79,19 @@ def persona_scraper(url: str, description: str) -> Persona:
     # For example, 'gemini-1.5-flash' or 'gemini-1.5-pro'.
     
     try:
-        # Forcing a JSON response
-        generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        # Generate content without the problematic response_mime_type parameter
+        ai_response = model.generate_content(prompt)
         
-        ai_response = model.generate_content(prompt, generation_config=generation_config)
+        response_text = ai_response.text.strip()
+        print(response_text)
         
+        # Extract JSON from response if it's wrapped in markdown code blocks
+        if response_text.startswith('```json'):
+            response_text = response_text.split('```json')[1].split('```')[0].strip()
+        elif response_text.startswith('```'):
+            response_text = response_text.split('```')[1].split('```')[0].strip()
         
-        # The response text should be a valid JSON string
-        print(ai_response.text)
-        persona_json = json.loads(ai_response.text)
+        persona_json = json.loads(response_text)
     except Exception as e:
         print(f"Error calling Gemini API or parsing JSON: {e}")
         persona_json = {}
@@ -125,11 +129,19 @@ def persona_scraper(url: str, description: str) -> Persona:
                 result.append(SocialProof(statement=proof))
         return result
 
+    # Helper function to extract first item from list or return string
+    def extract_string(val):
+        if isinstance(val, list) and val:
+            return val[0].strip() if val[0] else None
+        elif isinstance(val, str):
+            return val.strip() or None
+        return None
+
     # Create and return the Persona object
     return Persona(
         name='',  # Explicitly empty
-        title=(persona_json.get('title') or '').strip() or None,
-        company=(persona_json.get('company') or '').strip() or None,
+        title=extract_string(persona_json.get('title')),
+        company=extract_string(persona_json.get('company')),
         email='',  # Explicitly empty
         pain_points=ensure_list(persona_json.get('pain_points')),
         social_proof=process_social_proof(persona_json.get('social_proof')),
