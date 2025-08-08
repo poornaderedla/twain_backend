@@ -17,5 +17,3 @@ class Persona(BaseModel):
     solutions : List[str] = []
     objections : List[str] = [] 
     competitive_advantages : List[str] = []
-    
-
