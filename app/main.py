@@ -132,7 +132,23 @@ async def create_persona(request: PersonaRequest):
         print(f"✅ Persona generated successfully: {persona}")
         
         # Prepare document for MongoDB (only use fields that exist in Persona model)
+        # Convert SocialProof objects to dictionaries for MongoDB serialization
+        social_proof_list = getattr(persona, 'social_proof', [])
+        social_proof_dicts = []
+        for proof in social_proof_list:
+            if hasattr(proof, 'statement') and hasattr(proof, 'source'):
+                social_proof_dicts.append({
+                    "statement": proof.statement,
+                    "source": proof.source
+                })
+            elif isinstance(proof, dict):
+                social_proof_dicts.append(proof)
+            else:
+                # Fallback: convert to string
+                social_proof_dicts.append({"statement": str(proof), "source": None})
+        
         persona_doc = {
+            "id": getattr(persona, 'id', str(uuid.uuid4())),  # Add the required id field
             "url": request.url,
             "description": request.description,
             "title": getattr(persona, 'title', None),
@@ -140,7 +156,7 @@ async def create_persona(request: PersonaRequest):
             "name": getattr(persona, 'name', None),
             "email": getattr(persona, 'email', None),
             "pain_points": getattr(persona, 'pain_points', []),
-            "social_proof": getattr(persona, 'social_proof', []),
+            "social_proof": social_proof_dicts,
             "cost_of_inaction": getattr(persona, 'cost_of_inaction', []),
             "solutions": getattr(persona, 'solutions', []),
             "objections": getattr(persona, 'objections', []),
@@ -159,7 +175,7 @@ async def create_persona(request: PersonaRequest):
                 print("ERROR: Database not connected! Cannot save persona.")
                 raise Exception("Database connection not available")
             
-            persona_id = await insert_document("personas", persona_doc)
+            persona_id = await insert_document("persona", persona_doc)
             print(f"✅ Persona successfully saved to MongoDB with ID: {persona_id}")
             persona_doc["_id"] = persona_id
             
@@ -262,10 +278,33 @@ async def create_campaign(request: CampaignRequest):
         raise HTTPException(status_code=400, detail="Invalid outreach channel selected.")
     if not generated_content:
         raise HTTPException(status_code=500, detail="Failed to generate any campaign content.")
+    
+    # Convert MessageContent objects to dictionaries for MongoDB serialization
+    def convert_message_content_to_dict(content):
+        if isinstance(content, list):
+            return [convert_message_content_to_dict(item) for item in content]
+        elif hasattr(content, 'subject') and hasattr(content, 'body'):
+            # It's a MessageContent object
+            return {
+                "subject": content.subject,
+                "body": content.body
+            }
+        elif isinstance(content, dict):
+            # It's already a dictionary, but check if it contains MessageContent objects
+            result = {}
+            for key, value in content.items():
+                result[key] = convert_message_content_to_dict(value)
+            return result
+        else:
+            return content
+    
+    # Convert the generated content to MongoDB-serializable format
+    serializable_content = convert_message_content_to_dict(generated_content)
+    
     # Save campaign to MongoDB
     campaign_doc = {
         **campaign_details,
-        "generated_content": generated_content,
+        "generated_content": serializable_content,
         "status": "active",
         "persona_data": {
             "title": persona.title,
@@ -274,7 +313,7 @@ async def create_campaign(request: CampaignRequest):
         }
     }
     try:
-        campaign_id = await insert_document("campaigns", campaign_doc)
+        campaign_id = await insert_document("campaign", campaign_doc)
         print(f"Campaign saved to MongoDB with ID: {campaign_id}")
         campaign_doc["_id"] = campaign_id
     except Exception as db_error:
@@ -324,10 +363,33 @@ async def create_campaign_post(request: CampaignRequest):
         raise HTTPException(status_code=400, detail="Invalid outreach channel selected.")
     if not generated_content:
         raise HTTPException(status_code=500, detail="Failed to generate any campaign content.")
+    
+    # Convert MessageContent objects to dictionaries for MongoDB serialization
+    def convert_message_content_to_dict(content):
+        if isinstance(content, list):
+            return [convert_message_content_to_dict(item) for item in content]
+        elif hasattr(content, 'subject') and hasattr(content, 'body'):
+            # It's a MessageContent object
+            return {
+                "subject": content.subject,
+                "body": content.body
+            }
+        elif isinstance(content, dict):
+            # It's already a dictionary, but check if it contains MessageContent objects
+            result = {}
+            for key, value in content.items():
+                result[key] = convert_message_content_to_dict(value)
+            return result
+        else:
+            return content
+    
+    # Convert the generated content to MongoDB-serializable format
+    serializable_content = convert_message_content_to_dict(generated_content)
+    
     # Save campaign to MongoDB
     campaign_doc = {
         **campaign_details,
-        "generated_content": generated_content,
+        "generated_content": serializable_content,
         "status": "active",
         "persona_data": {
             "title": persona.title,
@@ -344,7 +406,7 @@ async def create_campaign_post(request: CampaignRequest):
             print("ERROR: Database not connected! Cannot save campaign.")
             raise Exception("Database connection not available")
         
-        campaign_id = await insert_document("campaigns", campaign_doc)
+        campaign_id = await insert_document("campaign", campaign_doc)
         print(f"✅ Campaign successfully saved to MongoDB with ID: {campaign_id}")
         campaign_doc["_id"] = campaign_id
         
@@ -366,7 +428,7 @@ async def create_campaign_post(request: CampaignRequest):
 async def get_personas(limit: int = 50):
     """Retrieve stored personas from MongoDB."""
     try:
-        personas = await find_documents("personas", {}, limit)
+        personas = await find_documents("persona", {}, limit)
         return {"personas": personas, "count": len(personas)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve personas: {e}")
@@ -376,7 +438,7 @@ async def get_personas(limit: int = 50):
 async def get_campaigns(limit: int = 50):
     """Retrieve stored campaigns from MongoDB."""
     try:
-        campaigns = await find_documents("campaigns", {}, limit)
+        campaigns = await find_documents("campaign", {}, limit)
         return {"campaigns": campaigns, "count": len(campaigns)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve campaigns: {e}")
