@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     GEMINI_API_KEY: str
+    MONGO_URL: str = "mongodb+srv://vamsidulam11:Am5TNeH6YRnGuvLR@cluster0.4kq3vjn.mongodb.net/TWAIN?retryWrites=true&w=majority&appName=Cluster0"
+    DATABASE_NAME: str = "TWAIN"
 
     model_config = SettingsConfigDict(
         env_file=".env",

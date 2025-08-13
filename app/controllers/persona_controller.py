@@ -5,6 +5,7 @@ This module handles web scraping, content processing, and AI-based persona gener
 
 import json
 from typing import List
+import uuid
 
 import google.generativeai as genai
 import requests
@@ -28,19 +29,24 @@ def persona_scraper(url: str, description: str) -> Persona:
     Scrapes web content, combines it with a description, sends it to the Gemini API,
     and parses the JSON response into a Persona model.
     """
+    print(f"[PERSONA_SCRAPER] Starting persona generation for URL: {url}")
+    print(f"[PERSONA_SCRAPER] Description: {description}")
+    
     # Configure the Gemini API client
     if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not configured")
     genai.configure(api_key=settings.GEMINI_API_KEY)
-
+    print(f"[PERSONA_SCRAPER] Gemini API configured successfully")
 
     # Scrape web content
     web_content = ''
     try:
+        print(f"[PERSONA_SCRAPER] Attempting to scrape URL: {url}")
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        print(f"Processing description: {description}")
+        print(f"[PERSONA_SCRAPER] Successfully scraped URL, processing content...")
+        
         # Extract meaningful content hierarchically
         content_tags = []
         
@@ -64,26 +70,31 @@ def persona_scraper(url: str, description: str) -> Persona:
             
         # Convert to string and clean up
         web_content = '\n'.join(filter(None, content_tags))
-        print(f"[DEBUG] Scraped content length: {len(web_content)}")
+        print(f"[PERSONA_SCRAPER] Scraped content length: {len(web_content)} characters")
+        
+        if len(web_content) < 50:
+            print(f"[PERSONA_SCRAPER] WARNING: Very little content scraped, this might cause issues")
+            
     except Exception as e:
-        print(f"[ERROR] Error scraping URL: {e}")
+        print(f"[PERSONA_SCRAPER] ERROR: Failed to scrape URL {url}: {e}")
         web_content = ''
 
     # Always initialize the model outside the try block
     model = genai.GenerativeModel('gemini-1.5-flash')
+    print(f"[PERSONA_SCRAPER] Gemini model initialized")
 
     # Prepare the prompt for Gemini
-    prompt = prompts.create_persona_prompt(web_content = web_content , description=description)
-
-    # It's recommended to use a model that supports JSON mode for more reliable JSON output.
-    # For example, 'gemini-1.5-flash' or 'gemini-1.5-pro'.
+    prompt = prompts.create_persona_prompt(web_content=web_content, description=description)
+    print(f"[PERSONA_SCRAPER] Prompt prepared, length: {len(prompt)} characters")
     
     try:
+        print(f"[PERSONA_SCRAPER] Calling Gemini API...")
         # Generate content without the problematic response_mime_type parameter
         ai_response = model.generate_content(prompt)
         
         response_text = ai_response.text.strip()
-        print(response_text)
+        print(f"[PERSONA_SCRAPER] Gemini response received, length: {len(response_text)} characters")
+        print(f"[PERSONA_SCRAPER] Response preview: {response_text[:200]}...")
         
         # Extract JSON from response if it's wrapped in markdown code blocks
         if response_text.startswith('```json'):
@@ -91,10 +102,24 @@ def persona_scraper(url: str, description: str) -> Persona:
         elif response_text.startswith('```'):
             response_text = response_text.split('```')[1].split('```')[0].strip()
         
+        print(f"[PERSONA_SCRAPER] Attempting to parse JSON...")
         persona_json = json.loads(response_text)
+        print(f"[PERSONA_SCRAPER] JSON parsed successfully: {persona_json}")
+        
     except Exception as e:
-        print(f"Error calling Gemini API or parsing JSON: {e}")
-        persona_json = {}
+        print(f"[PERSONA_SCRAPER] ERROR: Failed to call Gemini API or parse JSON: {e}")
+        print(f"[PERSONA_SCRAPER] Response text was: {response_text if 'response_text' in locals() else 'No response'}")
+        # Return a default persona instead of empty dict
+        persona_json = {
+            'title': 'Unknown',
+            'company': 'Unknown',
+            'pain_points': ['Unable to analyze website'],
+            'social_proof': [],
+            'cost_of_inaction': ['Unable to analyze website'],
+            'solutions': ['Unable to analyze website'],
+            'objections': ['Unable to analyze website'],
+            'competitive_advantages': ['Unable to analyze website']
+        }
     def ensure_list(val):
         if val is None:
             return []
@@ -138,7 +163,8 @@ def persona_scraper(url: str, description: str) -> Persona:
         return None
 
     # Create and return the Persona object
-    return Persona(
+    persona = Persona(
+        id=str(uuid.uuid4()),  # Add the required id field
         name='',  # Explicitly empty
         title=extract_string(persona_json.get('title')),
         company=extract_string(persona_json.get('company')),
@@ -150,5 +176,8 @@ def persona_scraper(url: str, description: str) -> Persona:
         objections=ensure_list(persona_json.get('objections')),
         competitive_advantages=ensure_list(persona_json.get('competitive_advantages'))
     )
+    
+    print(f"[PERSONA_SCRAPER] ✅ Persona created successfully: {persona.company} - {persona.title}")
+    return persona
     
     
