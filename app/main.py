@@ -36,7 +36,9 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:3000",
+        "http://localhost:8081",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:8081",
         "http://localhost:8080",
         "http://127.0.0.1:8080"
     ],
@@ -361,8 +363,11 @@ async def create_campaign_post(request: CampaignRequest):
         campaign_details["content_type"] = "multi_channel"
     else:
         raise HTTPException(status_code=400, detail="Invalid outreach channel selected.")
-    if not generated_content:
-        raise HTTPException(status_code=500, detail="Failed to generate any campaign content.")
+    
+    # Check if content generation was successful
+    if not generated_content or (isinstance(generated_content, dict) and not any(generated_content.values())) or (isinstance(generated_content, list) and len(generated_content) == 0):
+        campaign_details["message"] = f"Campaign created but content generation failed due to API issues. Please try again later."
+        generated_content = [] if not isinstance(generated_content, list) else generated_content
     
     # Convert MessageContent objects to dictionaries for MongoDB serialization
     def convert_message_content_to_dict(content):
@@ -389,6 +394,19 @@ async def create_campaign_post(request: CampaignRequest):
     # Save campaign to MongoDB
     campaign_doc = {
         **campaign_details,
+        "persona": {
+            "id": persona.id,
+            "name": persona.name,
+            "title": persona.title,
+            "company": persona.company,
+            "email": persona.email,
+            "pain_points": persona.pain_points,
+            "social_proof": persona.social_proof,
+            "cost_of_inaction": persona.cost_of_inaction,
+            "solutions": persona.solutions,
+            "objections": persona.objections,
+            "competitive_advantages": persona.competitive_advantages
+        },
         "generated_content": serializable_content,
         "status": "active",
         "persona_data": {
